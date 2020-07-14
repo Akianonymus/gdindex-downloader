@@ -7,17 +7,7 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[SKIP-CI]')"
     steps:
       - uses: actions/checkout@v1
-      - uses: dorny/paths-filter@v2.2.0
-        id: filter
-        with:
-          filters: |
-            main:
-              - '+(gdl|utils|test).sh'
-            install:
-              - 'install.sh'
-      - name: 'Install gdrive-downloader'
-        if: steps.filter.outputs.install == 'true'
+      - name: 'Install gdindex-downloader'
         run: 'bash install.sh -b ${GITHUB_REF##*/}'
       - name: 'Download Files'
-        if: steps.filter.outputs.main == 'true'
         run: 'bash test.sh'

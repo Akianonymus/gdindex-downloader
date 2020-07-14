@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Install, Update or Uninstall gdrive-downloader
+# Install, Update or Uninstall gdindex-downloader
 # shellcheck source=/dev/null
 
 _usage() {
     printf "
-The script can be used to install gdrive-downloader script in your system.\n
+The script can be used to install gdindex-downloader script in your system.\n
 Usage: %s [options.. ]\n
 All flags are optional.\n
 Options:\n
-  -i | --interactive - Install script interactively, will ask for all the varibles one by one.\nNote: This will disregard all arguments given with below flags.\n
-  -p | --path <dir_name> - Custom path where you want to install script.\nDefault Path: %s/.gdrive-downloader \n
+  -p | --path <dir_name> - Custom path where you want to install script.\nDefault Path: %s/.gdindex-downloader \n
   -c | --cmd <command_name> - Custom command name, after installation script will be available as the input argument.
-      Default command: gdl\n
-  -r | --repo <Username/reponame> - Upload script from your custom repo,e.g --repo Akianonymus/gdrive-downloader, make sure your repo file structure is same as official repo.\n
+      Default command: idl\n
+  -r | --repo <Username/reponame> - Upload script from your custom repo,e.g --repo Akianonymus/gdindex-downloader, make sure your repo file structure is same as official repo.\n
   -b | --branch <branch_name> - Specify branch name for the github repo, applies to custom and default repo both.\n
   -s | --shell-rc <shell_file> - Specify custom rc file, where PATH is appended, by default script detects .zshrc and .bashrc.\n
   -t | --time 'no of days' - Specify custom auto update time ( given input will taken as number of days ) after which script will try to automatically update itself.\n
@@ -63,7 +62,7 @@ _check_debug() {
         if _is_terminal; then
             # This refreshes the interactive shell so we can use the ${COLUMNS} variable in the _print_center function.
             shopt -s checkwinsize && (: && :)
-            if [[ ${COLUMNS} -lt 40 ]]; then
+            if [[ ${COLUMNS} -lt 45 ]]; then
                 _print_center() { { [[ $# = 3 ]] && printf "%s\n" "[ ${2} ]"; } || { printf "%s\n" "[ ${2}${3} ]"; }; }
             else
                 trap 'shopt -s checkwinsize; (:;:)' SIGWINCH
@@ -159,15 +158,11 @@ _count() {
 #   Error   - print error message and exit 1
 ###################################################
 _detect_profile() {
-    declare CURRENT_SHELL="${SHELL##*/}"
+    CURRENT_SHELL="${SHELL##*/}"
     case "${CURRENT_SHELL}" in
-        'bash') DETECTED_PROFILE="${HOME}/.bashrc" ;;
-        'zsh') DETECTED_PROFILE="${HOME}/.zshrc" ;;
-        *) if [[ -f "${HOME}/.profile" ]]; then
-            DETECTED_PROFILE="${HOME}/.profile"
-        else
-            printf "No compaitable shell file\n" && exit 1
-        fi ;;
+        *bash*) DETECTED_PROFILE="${HOME}/.bashrc" ;;
+        *zsh*) DETECTED_PROFILE="${HOME}/.zshrc" ;;
+        *) DETECTED_PROFILE="${HOME}/.profile" ;;
     esac
     printf "%s\n" "${DETECTED_PROFILE}"
 }
@@ -215,30 +210,39 @@ _full_path() {
 # Fetch latest commit sha of release or branch
 # Do not use github rest api because rate limit error occurs
 # Globals: None
-# Arguments: 2
+# Arguments: 3
 #   ${1} = repo name
-#   ${2} = branch or release
-#   ${3} = branch name or release name
+#   ${2} = sha sum or branch name or tag name
+#   ${3} = path ( optional )
 # Result: print fetched shas
 ###################################################
 _get_files_and_commits() {
-    declare repo="${1:-${REPO}}" type_value="${2:-${TYPE_VALUE}}"
-    declare html commits files
+    repo_get_files_and_commits="${1:-${REPO}}" type_value_get_files_and_commits="${2:-${LATEST_CURRENT_SHA}}" path_get_files_and_commits="${3:-}"
+    unset html_get_files_and_commits commits_get_files_and_commits files_get_files_and_commits
 
     # shellcheck disable=SC2086
-    html="$(curl ${CURL_ARGS:--#} --compressed https://github.com/"${repo}"/file-list/"${type_value}")"
-    _clear_line 1 1>&2
-    commits="$(: "$(grep -o "commit/.*\"" <<< "${html}" || :)" && : "${_//commit\//}" && printf "%s\n" "${_//\"/}")"
+    html_get_files_and_commits="$(curl -s --compressed "https://github.com/${repo_get_files_and_commits}/file-list/${type_value_get_files_and_commits}/${path_get_files_and_commits}")" ||
+        { _print_center "normal" "Error: Cannot fetch" " update details" "=" 1>&2 && exit 1; }
+    commits_get_files_and_commits="$(printf "%s\n" "${html_get_files_and_commits}" | grep -o "commit/.*\"" | sed -e "s/\(commit\/\|\"\)//g" -e "s/>.*//g")"
     # shellcheck disable=SC2001
-    files="$(: "$(grep -oE '(blob|tree)/'"${type_value}"'.*\"' <<< "${html}" || :)" && : "${_//\"/}" && sed "s/>.*//g" <<< "${_}")"
+    files_get_files_and_commits="$(printf "%s\n" "${html_get_files_and_commits}" | grep -oE '(blob|tree)/'"${type_value_get_files_and_commits}"'.*\"' | sed -e "s/\"//g" -e "s/>.*//g")"
 
-    if [[ $(_count <<< "${files}") -gt $(_count <<< "${commits}") ]]; then
-        files="$(sed 1d <<< "${files}")"
+    total_files="$(printf "%s\n" "${files_get_files_and_commits}" | wc -l)"
+    total_commits="$(printf "%s\n" "${commits_get_files_and_commits}" | wc -l)"
+    if [ "$((total_files - 2))" = "${total_commits}" ]; then
+        files_get_files_and_commits="$(printf "%s\n" "${files_get_files_and_commits}" | sed 1,2d)"
+    elif [ "${total_files}" -gt "${total_commits}" ]; then
+        files_get_files_and_commits="$(printf "%s\n" "${files_get_files_and_commits}" | sed 1d)"
     fi
 
-    while read -u 4 -r file && read -r -u 5 commit; do
-        printf "%s\n" "${file//blob\/${type_value}\//}__.__${commit}"
-    done 4<<< "${files}" 5<<< "${commits}" | grep -v tree || :
+    i=0
+    while read -r file <&4; do
+        i=$((i + 1))
+        printf "%s\n" "$(printf "%s\n" "${file}" | sed -e "s/blob\/${type_value_get_files_and_commits}\///g" -e "s/$/__.__/g")$(printf "%s\n" "${commits_get_files_and_commits}" | sed -n "${i}"p)"
+    done 4<< EOF
+    $(printf "%s\n" "${files_get_files_and_commits}")
+EOF
+    return 0
 }
 
 ###################################################
@@ -248,7 +252,7 @@ _get_files_and_commits() {
 # Arguments: 3
 #   ${1} = "branch" or "release"
 #   ${2} = branch name or release name
-#   ${3} = repo name e.g Akianonymus/gdrive-downloader
+#   ${3} = repo name e.g Akianonymus/gdindex-downloader
 # Result: print fetched sha
 ###################################################
 _get_latest_sha() {
@@ -343,9 +347,9 @@ _print_center() {
                 { [[ ${#input1} -gt ${TO_PRINT} ]] && out="[ ${input1:0:TO_PRINT}..]"; } || { out="[ ${input1} ]"; }
             else
                 declare input1="${2}" input2="${3}" symbol="${4}" TO_PRINT temp out
-                TO_PRINT="$((TERM_COLS * 40 / 100))"
+                TO_PRINT="$((TERM_COLS * 47 / 100))"
                 { [[ ${#input1} -gt ${TO_PRINT} ]] && temp+=" ${input1:0:TO_PRINT}.."; } || { temp+=" ${input1}"; }
-                TO_PRINT="$((TERM_COLS * 55 / 100))"
+                TO_PRINT="$((TERM_COLS * 46 / 100))"
                 { [[ ${#input2} -gt ${TO_PRINT} ]] && temp+="${input2:0:TO_PRINT}.. "; } || { temp+="${input2} "; }
                 out="[${temp}]"
             fi
@@ -447,17 +451,17 @@ _update_config() {
 # Result: read description
 ###################################################
 _variables() {
-    REPO="Akianonymus/gdrive-downloader"
-    COMMAND_NAME="gdl"
-    INFO_PATH="${HOME}/.gdrive-downloader"
-    INSTALL_PATH="${HOME}/.gdrive-downloader/bin"
+    REPO="Akianonymus/gdindex-downloader"
+    COMMAND_NAME="idl"
+    INFO_PATH="${HOME}/.gdindex-downloader"
+    INSTALL_PATH="${HOME}/.gdindex-downloader/bin"
     UTILS_FILE="utils.sh"
     TYPE="branch"
     TYPE_VALUE="master"
     SHELL_RC="$(_detect_profile)"
     LAST_UPDATE_TIME="$(printf "%(%s)T\\n" "-1")" && export LAST_UPDATE_TIME
-    if [[ -r ${INFO_PATH}/gdrive-downloader.info ]]; then
-        source "${INFO_PATH}"/gdrive-downloader.info
+    if [[ -r ${INFO_PATH}/gdindex-downloader.info ]]; then
+        source "${INFO_PATH}"/gdindex-downloader.info
     fi
     __VALUES_ARRAY=(REPO COMMAND_NAME INSTALL_PATH TYPE TYPE_VALUE SHELL_RC LAST_UPDATE_TIME AUTO_UPDATE_INTERVAL)
 }
@@ -466,14 +470,14 @@ _variables() {
 # Download files, script and utils
 ###################################################
 _download_files() {
-    files_with_commits="$(_get_files_and_commits | grep 'gdl.sh\|utils.sh')"
+    files_with_commits="$(_get_files_and_commits "${REPO}" "${LATEST_CURRENT_SHA}" | grep 'idl.sh\|utils.sh')"
     repo="${REPO}"
 
     cd "${INSTALL_PATH}" &> /dev/null || exit 1
 
     while read -r -u 4 line; do
         file="${line/__.__*/}" && sha="${line/*__.__/}"
-        local_file="${file/gdl.sh/${COMMAND_NAME}}"
+        local_file="${file/idl.sh/${COMMAND_NAME}}"
 
         if [[ -f ${local_file} && $(_tail 1 < "${local_file}") = "#${sha}" ]]; then
             continue
@@ -481,10 +485,10 @@ _download_files() {
 
         _print_center "justify" "Downloading" " ${local_file}.." "-"
         # shellcheck disable=SC2086
-        if ! curl ${CURL_ARGS:--#} --compressed "https://raw.githubusercontent.com/${repo}/${sha}/${file}" -o "${local_file}"; then
+        if ! curl -s --compressed "https://raw.githubusercontent.com/${repo}/${sha}/${file}" -o "${local_file}"; then
             return 1
         fi
-        for _ in {1..2}; do _clear_line 1; done
+        _clear_line 1
 
         printf "\n#%s\n" "${sha}" >> "${local_file}"
     done 4<<< "${files_with_commits}"
@@ -493,40 +497,12 @@ _download_files() {
 }
 
 ###################################################
-# Inject utils.sh realpath to gdl
+# Inject utils.sh realpath to idl
 ###################################################
 _inject_utils_path() {
-    declare gdl
-    gdl="$(_insert_line 2 "UTILS_FILE=\"${INSTALL_PATH}/${UTILS_FILE}\"" < "${INSTALL_PATH}/${COMMAND_NAME}")"
-    printf "%s\n" "${gdl}" >| "${INSTALL_PATH}/${COMMAND_NAME}"
-}
-
-###################################################
-# Start a interactive session, asks for all the varibles.
-# Globals: 1 variable, 1 function
-#   Variable - __VALUES_ARRAY ( array )
-#   Function - _clear_line
-# Arguments: None
-# Result: read description
-#   If tty absent, then exit
-###################################################
-_start_interactive() {
-    _print_center "justify" "Interactive Mode" "="
-    _print_center "justify" "Press return for default values.." "-"
-    for i in "${__VALUES_ARRAY[@]}"; do
-        j="${!i}" && k="${i}"
-        read -r -p "${i} [ Default: ${j} ]: " "${i?}"
-        if [[ -z ${!i} ]]; then
-            read -r "${k?}" <<< "${j}"
-        fi
-    done
-    for _ in "${__VALUES_ARRAY[@]}"; do _clear_line 1; done
-    for _ in {1..3}; do _clear_line 1; done
-    for i in "${__VALUES_ARRAY[@]}"; do
-        if [[ -n ${i} ]]; then
-            printf "%s\n" "${i}: ${!i}"
-        fi
-    done
+    declare idl
+    idl="$(_insert_line 2 "UTILS_FILE=\"${INSTALL_PATH}/${UTILS_FILE}\"" < "${INSTALL_PATH}/${COMMAND_NAME}")"
+    printf "%s\n" "${idl}" >| "${INSTALL_PATH}/${COMMAND_NAME}"
 }
 
 ###################################################
@@ -542,7 +518,7 @@ _start_interactive() {
 ###################################################
 _install() {
     mkdir -p "${INSTALL_PATH}"
-    _print_center "justify" 'Installing gdrive-downloader..' "-"
+    _print_center "justify" 'Installing gdindex-downloader..' "-"
     _print_center "justify" "Fetching latest sha.." "-"
     LATEST_CURRENT_SHA="$(_get_latest_sha "${TYPE}" "${TYPE_VALUE}" "${REPO}")"
     _clear_line 1
@@ -551,12 +527,12 @@ _install() {
         _inject_utils_path || { _print_center "justify" "Cannot edit installed files" ", run with -D flag, grab a log and create a issue in the repo." "=" && exit 1; }
         chmod +x "${INSTALL_PATH}"/*
         for i in "${__VALUES_ARRAY[@]}"; do
-            _update_config "${i}" "${!i}" "${INFO_PATH}"/gdrive-downloader.info
+            _update_config "${i}" "${!i}" "${INFO_PATH}"/gdindex-downloader.info
         done
-        _update_config LATEST_INSTALLED_SHA "${LATEST_CURRENT_SHA}" "${INFO_PATH}"/gdrive-downloader.info
-        _update_config PATH "${INSTALL_PATH}:${PATH}" "${INFO_PATH}"/gdrive-downloader.binpath
-        if ! grep "source ${INFO_PATH}/gdrive-downloader.binpath" "${SHELL_RC}" &> /dev/null; then
-            printf "\nsource %s/gdrive-downloader.binpath" "${INFO_PATH}" >> "${SHELL_RC}"
+        _update_config LATEST_INSTALLED_SHA "${LATEST_CURRENT_SHA}" "${INFO_PATH}"/gdindex-downloader.info
+        _update_config PATH "${INSTALL_PATH}:"\${PATH} "${INFO_PATH}"/gdindex-downloader.binpath
+        if ! grep "source ${INFO_PATH}/gdindex-downloader.binpath" "${SHELL_RC}" &> /dev/null; then
+            printf "\nsource %s/gdindex-downloader.binpath" "${INFO_PATH}" >> "${SHELL_RC}"
         fi
         for _ in {1..3}; do _clear_line 1; done
         _print_center "justify" "Installed Successfully" "="
@@ -593,23 +569,23 @@ _update() {
     fi
     _clear_line 1
     if [[ ${LATEST_CURRENT_SHA} = "${LATEST_INSTALLED_SHA}" ]]; then
-        _print_center "justify" "Latest gdrive-downloader already installed." "="
+        _print_center "justify" "Latest gdindex-downloader already installed." "="
     else
         _print_center "justify" "Updating.." "-"
         if _download_files; then
             _inject_utils_path || { _print_center "justify" "Cannot edit installed files" ", check if sed program is working correctly" "=" && exit 1; }
             chmod +x "${INSTALL_PATH}"/*
             for i in "${__VALUES_ARRAY[@]}"; do
-                _update_config "${i}" "${!i}" "${INFO_PATH}"/gdrive-downloader.info
+                _update_config "${i}" "${!i}" "${INFO_PATH}"/gdindex-downloader.info
             done
-            _update_config LATEST_INSTALLED_SHA "${LATEST_CURRENT_SHA}" "${INFO_PATH}"/gdrive-downloader.info
-            _update_config PATH "${INSTALL_PATH}:${PATH}" "${INFO_PATH}"/gdrive-downloader.binpath
-            if ! grep "source ${INFO_PATH}/gdrive-downloader.binpath" "${SHELL_RC}" &> /dev/null; then
-                printf "\nsource %s/gdrive-downloader.binpath" "${INFO_PATH}" >> "${SHELL_RC}"
+            _update_config LATEST_INSTALLED_SHA "${LATEST_CURRENT_SHA}" "${INFO_PATH}"/gdindex-downloader.info
+            _update_config PATH "${INSTALL_PATH}:${PATH}" "${INFO_PATH}"/gdindex-downloader.binpath
+            if ! grep "source ${INFO_PATH}/gdindex-downloader.binpath" "${SHELL_RC}" &> /dev/null; then
+                printf "\nsource %s/gdindex-downloader.binpath" "${INFO_PATH}" >> "${SHELL_RC}"
             fi
             _clear_line 1
             for i in "${__VALUES_ARRAY[@]}"; do
-                _update_config "${i}" "${!i}" "${INFO_PATH}"/gdrive-downloader.info
+                _update_config "${i}" "${!i}" "${INFO_PATH}"/gdindex-downloader.info
             done
             _print_center "justify" 'Successfully Updated.' "="
         else
@@ -631,11 +607,11 @@ _update() {
 ###################################################
 _uninstall() {
     _print_center "justify" "Uninstalling.." "-"
-    __bak="source ${INFO_PATH}/gdrive-downloader.binpath"
+    __bak="source ${INFO_PATH}/gdindex-downloader.binpath"
     if _new_rc="$(sed "s|${__bak}||g" "${SHELL_RC}")" &&
         printf "%s\n" "${_new_rc}" >| "${SHELL_RC}"; then
         rm -f "${INSTALL_PATH}"/{"${COMMAND_NAME}","${UTILS_FILE}"}
-        rm -f "${INFO_PATH}"/{gdrive-downloader.info,gdrive-downloader.binpath,update.log}
+        rm -f "${INFO_PATH}"/{gdindex-downloader.info,gdindex-downloader.binpath,update.log}
         [[ -z $(find "${INFO_PATH}" -type f) ]] && rm -rf "${INFO_PATH}"
         _clear_line 1
         _print_center "justify" "Uninstall complete." "="
@@ -668,15 +644,6 @@ _setup_arguments() {
         case "${1}" in
             -h | --help)
                 _usage
-                ;;
-            -i | --interactive)
-                if _is_terminal; then
-                    INTERACTIVE="true"
-                    return 0
-                else
-                    printf "Cannot start interactive mode in an non tty environment\n"
-                    exit 1
-                fi
                 ;;
             -p | --path)
                 _check_longoptions "${1}" "${2}"
@@ -758,15 +725,11 @@ main() {
 
     _check_debug
 
-    if [[ -n ${INTERACTIVE} ]]; then
-        _start_interactive
-    fi
-
     if [[ -n ${UNINSTALL} ]]; then
         if type -a "${COMMAND_NAME}" &> /dev/null; then
             _uninstall
         else
-            _print_center "justify" "gdrive-downloader is not installed." "="
+            _print_center "justify" "gdindex-downloader is not installed." "="
             exit 1
         fi
     else

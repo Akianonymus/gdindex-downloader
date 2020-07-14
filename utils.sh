@@ -2,6 +2,19 @@
 # Functions that will used in core script
 
 ###################################################
+# Alternative to basename command
+# Globals: None
+# Arguments: 1
+#   ${1} = anything
+# Result: Read description.
+###################################################
+_basename() {
+    declare tmp=${1%"${1##*[!/]}"}
+    tmp=${tmp##*/} && tmp=${tmp%"${2/"$tmp"/}"}
+    printf '%s\n' "${tmp:-/}"
+}
+
+###################################################
 # Alternative to sleep command
 # Globals: None
 # Arguments: 1
@@ -129,24 +142,6 @@ _count() {
 }
 
 ###################################################
-# Extract ID from a googledrive folder/file url.
-# Globals: None
-# Arguments: 1
-#   ${1} = googledrive folder/file url.
-# Result: print extracted ID
-###################################################
-_extract_id() {
-    [[ $# = 0 ]] && printf "%s: Missing arguments\n" "${FUNCNAME[0]}" && return 1
-    declare LC_ALL=C ID="${1//[[:space:]]/}"
-    case "${ID}" in
-        *'drive.google.com'*'id='*) ID="${ID/*id=/}" && ID="${ID//[?&]*/}" ;;
-        *'drive.google.com'*'file/d/'* | 'http'*'docs.google.com'*'/d/'*) ID="${ID/*\/d\//}" && ID="${ID/\/*/}" && ID="${ID//[?&]*/}" ;;
-        *'drive.google.com'*'drive'*'folders'*) ID="${ID/*\/folders\//}" && ID="${ID//[?&]*/}" ;;
-    esac
-    printf "%s\n" "${ID}"
-}
-
-###################################################
 # Check if script running in a terminal
 # Globals: 1 variable
 #   TERM
@@ -228,9 +223,9 @@ _print_center() {
                 { [[ ${#input1} -gt ${TO_PRINT} ]] && out="[ ${input1:0:TO_PRINT}..]"; } || { out="[ ${input1} ]"; }
             else
                 declare input1="${2}" input2="${3}" symbol="${4}" TO_PRINT temp out
-                TO_PRINT="$((TERM_COLS * 40 / 100))"
+                TO_PRINT="$((TERM_COLS * 47 / 100))"
                 { [[ ${#input1} -gt ${TO_PRINT} ]] && temp+=" ${input1:0:TO_PRINT}.."; } || { temp+=" ${input1}"; }
-                TO_PRINT="$((TERM_COLS * 55 / 100))"
+                TO_PRINT="$((TERM_COLS * 46 / 100))"
                 { [[ ${#input2} -gt ${TO_PRINT} ]] && temp+="${input2:0:TO_PRINT}.. "; } || { temp+="${input2} "; }
                 out="[${temp}]"
             fi
@@ -307,27 +302,40 @@ _tail() {
 
 ###################################################
 # Alternative to timeout command
-# Globals: None
+# Globals: 1 function
+#   _bash_sleep
 # Arguments: 1 and rest
 #   ${1} = amount of time to sleep
 #   rest = command to execute
 # Result: Read description
 # Reference:
-#   https://stackoverflow.com/a/11056286
+#   https://stackoverflow.com/a/24416732
 ###################################################
 _timeout() {
-    declare -i sleep="${1}" && shift
-    declare -i pid watcher
-    {
-        { "${@}"; } &
-        pid="${!}"
-        { read -r -t "${sleep:-10}" && kill -HUP "${pid}"; } &
-        watcher="${!}"
-        if wait "${pid}" 2> /dev/null; then
-            kill -9 "${watcher}"
-            return 0
-        else
-            return 1
-        fi
-    } &> /dev/null
+    declare timeout="${1:?Error: Specify Timeout}"
+    shift
+    (
+        eval "${@}" &
+        child="${!}"
+        trap -- "" SIGTERM
+        (
+            _bash_sleep "${timeout}"
+            kill "${child}" 2> /dev/null
+        ) &
+        wait "${child}"
+    ) &> /dev/null
+}
+
+###################################################
+# Decode the given string to readable format
+# Globals: None
+# Arguments: 1
+#   ${1} = string
+# Result: print decoded string
+# Reference:
+#   https://github.com/dylanaraps/pure-bash-bible
+###################################################
+_url_decode() {
+    declare data="${*//+/ }"
+    printf '%b\n' "${data//%/\x}"
 }
