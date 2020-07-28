@@ -337,5 +337,5 @@ _timeout() {
 ###################################################
 _url_decode() {
     declare data="${*//+/ }"
-    printf '%b\n' "${data//%/\x}"
+    printf '%b\n' "${data//%/\\x}"
 }
