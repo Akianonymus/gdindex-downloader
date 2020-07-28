@@ -16,6 +16,9 @@
 - Pretty logging
 - Easy to install and update
   - Auto update
+- Authentication support
+  - Save credentials for automatic authentication ( see --setu0 flag )
+  - maintain authentication for multiple urls
 
 ## Table of Contents
 
@@ -230,6 +233,18 @@ Now, we have covered the basics, move on to the next section for extra features 
 ### Download Script Custom Flags
 
 These are the custom flags that are currently implemented:
+
+-   <strong>--setup</strong>
+
+    Setup authentication for gdindex urls.
+
+    ---
+
+-   <strong>--auth username password</strong>
+
+    Specify username and password for given url.
+
+    ---
 
 -   <strong>-d | --directory 'foldername'</strong>
 

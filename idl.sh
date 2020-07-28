@@ -7,6 +7,8 @@ _usage() {
 The script can be used to download files/directory from gdindex.\n
 Usage:\n %s [options.. ] <file_[url|id]> or <folder[url|id]>\n
 Options:\n
+  --setup - Setup authentication for multiple gdindex urls.\n
+  --auth username password - Specify username and password.\n
   -d | --directory 'foldername' - option to _download given input in custom directory.\n
   -s | --skip-subdirs - Skip downloading of sub folders present in case of folders.\n
   -p | --parallel 'no_of_files_to_parallely_upload' - Download multiple files in parallel.\n
@@ -79,10 +81,66 @@ _version_info() {
 }
 
 ###################################################
+# Setup authentication for urls
+###################################################
+_setup_authentication() {
+    declare urls input _url _password list count
+    ! [[ -f "${CONFIG}" ]] && : >| "${CONFIG}"
+    _print_center "normal" "[ Manual authentication setup. ]" "="
+    printf "%s\n\n" "Config file: ${CONFIG}"
+    printf "%s\n" "To change pass for existing url, just enter the same url and desired password."
+    printf "%s\n\n" "To remove a url, just edit config yourself."
+    mapfile -t urls <<< "$(grep -v user_pass= < "${CONFIG}")"
+    if [[ -n ${urls[*]} ]]; then
+        printf "Current added URLs:\n"
+        for url in "${urls[@]}"; do
+            printf "%b" "$((count + 1)). \"${url}\"\n"
+        done
+        printf "\n"
+    else
+        printf "%s\n\n" "No urls added yet."
+    fi
+
+    until [[ -n ${_exit} ]]; do
+        unset input _url _username _password list reset
+        printf "%s" "Do you want to add a new url ? (y/n) "
+        read -r input
+        if [[ ${input} = y ]]; then
+            printf "\n"
+            until [[ -n ${_url} ]]; do
+                printf -- "Enter url: "
+                read -r _url
+                [[ -z ${_url} ]] && _clear_line 1
+            done
+            printf "\n"
+            until [[ -n ${_username} ]]; do
+                printf "Enter username: "
+                read -r _username
+                [[ -z ${_username} ]] && _clear_line 1
+            done
+            printf "\n"
+            until [[ -n ${_password} ]]; do
+                printf "Enter password: "
+                read -r -s _password
+                [[ -z ${_password} ]] && _clear_line 1
+            done
+            list="$(grep -v "${_url}"$'\n'"user_pass=" < "${CONFIG}" || :)"
+            _url="$(grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:@-]*/" <<< "${_url}" |
+                sed -e "s/http:\/\///g" -e "s/https:\/\///g" -e "s/^.*@//" -e "s/\/$//" || :)"
+            printf "%b\n" "${list:+${list}\n}${_url}\nuser_pass=${_username}:${_password}" >| "${CONFIG}"
+            printf "\r%s\n\n" "Successfully added \"${_url}\""
+        else
+            _exit=1
+        fi
+    done
+    exit "${?}"
+}
+
+###################################################
 # Default curl command use everywhere.
 ###################################################
 _fetch() {
-    curl -s --compressed "${@}" || return 1
+    curl -g -s --compressed "${@}" || return 1
 }
 
 ###################################################
@@ -99,28 +157,47 @@ _parse_json() {
 }
 
 ###################################################
+# convert html given by index url post request to a format which can be parsed later
+# This is also dirty af, but who cares.
+###################################################
+_parse_html() {
+    sed -e "s|<li>|\n|g" -e "s|</li>|\n|g" | grep -o 'href=".*"'
+}
+
+###################################################
 # Check if url is valid and determine if it's folder.
 # otherwise exit the script.
 ###################################################
 _check_url() {
     [[ $# = 0 ]] && printf "%s: Missing arguments\n" "${FUNCNAME[0]}" && return 1
     _print_center "justify" "Validating URL.." "-"
-    declare url="${1}" headers
-    if headers="$(_fetch -I -X POST "${url}")"; then
+    declare url="${1}" headers info
+    BASE_URL="$(grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:@-]*/" <<< "${url}" | sed -e "s/http:\/\///g" -e "s/https:\/\///g" -e "s/^.*@//" -e "s/\/.*//" || :)"
+    if [[ ${AUTH_LIST} =~ ${BASE_URL} ]]; then
+        info="$(grep "${BASE_URL}"$'\n'"user_pass=" <<< "${AUTH_LIST}" || :)"
+        AUTH="${info//*user_pass=/}"
+    fi
+    # shellcheck disable=SC2086
+    if headers="$(_fetch ${AUTH:+-u} ${AUTH} -I -X POST "${url}")"; then
         code="$(_head 1 <<< "${headers}")"
         if ! [[ ${code} =~ ^(40.*|50.*)+$ ]]; then
-            filename="$(sed -n "s/content-disposition:.*''//p" <<< "${headers}")"
+            filename="$(sed -n "s/.*ontent-.*isposition:.*''//p" <<< "${headers}")"
             if [[ -n ${filename} ]]; then
                 FILE_URL="${url}"
-                FILE_SIZE="$(sed -n "s/content-length: //p" <<< "${headers//$'\r'/}")"
+                FILE_SIZE="$(sed -n -e "s/.*ontent-.*ength: //p" <<< "${headers//$'\r'/}")"
                 for _ in {1..2}; do _clear_line 1; done && _newline "\n" && _print_center "justify" "File Detected" "=" && _newline "\n"
             else
                 FOLDER_URL="${url}"
                 for _ in {1..2}; do _clear_line 1; done && _print_center "justify" "Folder Detected" "=" && _newline "\n"
                 _print_center "justify" "Fetching" " folder details.." "-"
-                if JSON="$(_fetch -X POST "${url}/")" && ! [[ ${JSON} =~ html ]]; then
+                # shellcheck disable=SC2086
+                if RAW_DATA="$(_fetch ${AUTH:+-u} ${AUTH} -X POST "${url}/")"; then
                     for _ in {1..2}; do _clear_line 1; done
-                    JSON="$(_parse_json <<< "${JSON}")"
+                    if [[ ${RAW_DATA} =~ DOCTYPE\ HTML ]]; then
+                        PARSED_HTML="$(_parse_html <<< "${RAW_DATA}")"
+                    else
+                        PARSED_JSON="$(_parse_json <<< "${RAW_DATA}")"
+                    fi
                 else
                     for _ in {1..2}; do _clear_line 1; done
                     _print_center "justify" "Cannot fetch" " folder details" "=" && _newline "\n"
@@ -138,7 +215,7 @@ _check_url() {
         printf "%s\n" "${headers}"
         exit 1
     fi
-    export JSON
+    export PARSED_HTML PARSED_JSON
     return 0
 }
 
@@ -148,6 +225,8 @@ _check_url() {
 _download_file() {
     [[ $# = 0 ]] && printf "%s: Missing arguments\n" "${FUNCNAME[0]}" && return 1
     declare file_url="${1}" server_size="${2}"
+    # shellcheck disable=SC2086
+    [[ ${server_size} = zero ]] && : "$(curl -IsX POST ${AUTH:+-u} ${AUTH} "${file_url}" | sed -n -e "s/.*ontent-.*ength: //p")" && server_size="${_//$'\r'/}"
     declare name error_status success_status
     name="$(_url_decode "$(_basename "${file_url}")")"
     if [[ -n ${name} ]]; then
@@ -180,8 +259,9 @@ _download_file() {
         else
             _print_center "justify" "Downloading file.." "-"
         fi
+
         # shellcheck disable=SC2086 # Unnecessary to another check because ${CONTINUE} won't be anything problematic.
-        curl -L -s ${CONTINUE} ${CURL_SPEED} -o "${name}" "${file_url}" &> /dev/null &
+        curl -L -s ${AUTH:+-u} ${AUTH} ${CONTINUE} ${CURL_SPEED} -o "${name}" "${file_url}" &> /dev/null &
         pid="${!}"
 
         until [[ -f ${name} && -n ${pid} ]]; do _bash_sleep 0.5; done
@@ -220,25 +300,29 @@ _download_file() {
 ###################################################
 _download_folder() {
     [[ $# = 0 ]] && printf "%s: Missing arguments\n" "${FUNCNAME[0]}" && return 1
-    declare folder_url="${1}" parallel="${2}"
+    declare folder_url="${1}" parallel="${2}" raw_data
     declare info name files_list=() files=() files_size=() folders=() error_status success_status num_of_files num_of_folders
     name="$(_url_decode "$(_basename "${folder_url}")")"
     if [[ -n ${name} ]]; then
         _newline "\n"
         _print_center "justify" "${name}" "="
 
-        mapfile -t files <<< "$(_json_value name all all <<< "$(grep -v folder <<< "${JSON}" | grep mimeType -B1)" | sed "s|^|${folder_url}/|g")" || :
-        mapfile -t files_size <<< "$(_json_value size all all <<< "${JSON}")" || :
-        mapfile -t folders <<< "$(_json_value name all all <<< "$(grep folder -B1 <<< "${JSON}")" | sed "s|^|${folder_url}/|g")" || :
+        if [[ -n ${PARSED_JSON} ]]; then
+            mapfile -t files <<< "$(_json_value name all all <<< "$(grep -v folder <<< "${PARSED_JSON}" | grep mimeType -B1)" | sed "s|^|${folder_url}/|g")" || :
+            mapfile -t files_size <<< "$(_json_value size all all <<< "${PARSED_JSON}")" || :
+            mapfile -t folders <<< "$(_json_value name all all <<< "$(grep folder -B1 <<< "${PARSED_JSON}")" | sed "s|^|${folder_url}/|g")" || :
+            mapfile -t files_list <<< "$(while read -r -u 4 file && read -r -u 5 size; do
+                printf "%s\n" "${file}__.__${size}"
+            done 4<<< "$(printf "%s\n" "${files[@]}")" 5<<< "$(printf "%s\n" "${files_size[@]}")")"
+        else
+            mapfile -t files_list <<< "$(grep "/\"$" -v <<< "${PARSED_HTML}" | sed -e "s|^href=\"/|https://${BASE_URL}/|g" -e "s/\"$/__.__zero/g")" || :
+            mapfile -t folders <<< "$(grep "/\"$" <<< "${PARSED_HTML}" | sed -e "s|^href=\"/|https://${BASE_URL}/|g" -e "s/\"$//g" -e 1d)" || :
+        fi
 
-        mapfile -t files_list <<< "$(while read -r -u 4 file && read -r -u 5 size; do
-            printf "%s\n" "${file}__.__${size}"
-        done 4<<< "$(printf "%s\n" "${files[@]}")" 5<<< "$(printf "%s\n" "${files_size[@]}")")"
-
-        if [[ -z ${files[*]:-${folders[*]}} ]]; then
+        if [[ -z ${files_list[*]:-${folders[*]}} ]]; then
             for _ in {1..2}; do _clear_line 1; done && _print_center "justify" "${name}" " | Empty Folder" "=" && _newline "\n" && return 0
         fi
-        [[ -n ${files[*]} ]] && num_of_files="${#files[@]}"
+        [[ -n ${files_list[*]} ]] && num_of_files="${#files_list[@]}"
         [[ -n ${folders[*]} ]] && num_of_folders="${#folders[@]}"
 
         for _ in {1..2}; do _clear_line 1; done
@@ -315,22 +399,27 @@ _download_folder() {
         if [[ -z ${SKIP_SUBDIRS} && -n ${num_of_folders} ]]; then
             for folder in "${folders[@]}"; do
                 _print_center "justify" "Fetching folder" " details.." "-"
-                if JSON="$(_fetch -X POST "${folder}/")" && ! [[ ${JSON} =~ html ]]; then
-                    JSON="$(_parse_json <<< "${JSON}")" && export JSON
+                # shellcheck disable=SC2086
+                if raw_data="$(_fetch ${AUTH:+-u} ${AUTH} -X POST "${folder}/")"; then
+                    if [[ ${raw_data} =~ DOCTYPE\ HTML ]]; then
+                        PARSED_HTML="$(_parse_html <<< "${raw_data}")"
+                    else
+                        PARSED_JSON="$(_parse_json <<< "${raw_data}")"
+                    fi
                     _clear_line 1
                     # do this in a subshell so that the directory change doesn't apply to main loop
                     (_download_folder "${folder}" "${parallel:-}")
                 else
                     _clear_line 1
                     _print_center "justify" "Cannot fetch" "folder details" "=" 1>&2
-                    printf "%s\n" "${JSON}" 1>&2
+                    printf "%s\n" "${raw_data}" 1>&2
                 fi
             done
         fi
     else
         _clear_line 1
         _print_center "justify" "Error: some" " unknown error." "="
-        printf "%s\n" "${JSON}" && return 1
+        printf "%s\n" "${RAW_DATA}" && return 1
     fi
     return 0
 }
@@ -347,6 +436,8 @@ _setup_arguments() {
     unset URL_INPUT_ARRAY FINAL_INPUT_ARRAY
     INFO_PATH="${HOME}/.gdindex-downloader"
     INFO_FILE="${INFO_PATH}/gdindex-downloader.info"
+    CONFIG="${HOME}/.gdindex.conf" AUTH_LIST=""
+    [[ -f ${CONFIG} ]] && AUTH_LIST="$(< "${CONFIG}")"
 
     # API
     API_KEY="AIzaSyD2dHsZJ9b4OXuy5B_owiL8W18NaNOM8tk"
@@ -376,6 +467,14 @@ _setup_arguments() {
                 ;;
             -V | --version)
                 _version_info
+                ;;
+            --setup)
+                SETUP_AUTH="true"
+                ;;
+            --auth)
+                _check_longoptions "${1}" "${2}" && _check_longoptions "${1}" "${3}"
+                AUTH="${2}:${3}"
+                shift 2
                 ;;
             -l | --log)
                 _check_longoptions "${1}" "${2}"
@@ -430,17 +529,19 @@ _setup_arguments() {
         shift
     done
 
+    _check_debug
+
+    [[ -n ${SETUP_AUTH} ]] && _setup_authentication
+
     # If no input
     [[ -z ${URL_INPUT_ARRAY[*]} ]] && _short_help
 
     # Remove duplicates
     mapfile -t FINAL_INPUT_ARRAY <<< "$(_remove_array_duplicates "${URL_INPUT_ARRAY[@]}")"
 
-    _check_debug
-
     export DEBUG LOG_FILE_URL VERBOSE API_KEY API_URL API_VERSION
     export INFO_PATH FOLDERNAME SKIP_SUBDIRS NO_OF_PARALLEL_JOBS PARALLEL_DOWNLOAD SKIP_INTERNET_CHECK
-    export COLUMNS CURL_SPEED
+    export COLUMNS CURL_SPEED AUTH
     export -f _print_center _clear_line _newline _bash_sleep _tail _head _count _json_value _bytes_to_human
     export -f _fetch _check_url _download_file _download_folder _basename _url_decode
 
