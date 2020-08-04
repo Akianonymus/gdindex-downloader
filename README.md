@@ -17,7 +17,7 @@
 - Easy to install and update
   - Auto update
 - Authentication support
-  - Save credentials for automatic authentication ( see --setu0 flag )
+  - Save credentials for automatic authentication ( see --setup flag )
   - maintain authentication for multiple urls
 
 ## Table of Contents
